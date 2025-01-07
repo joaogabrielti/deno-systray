@@ -1,32 +1,28 @@
-import { open } from 'https://deno.land/x/open@v0.0.5/index.ts';
-import { downloadAndCache } from '../deps.ts';
+import { open } from 'https://deno.land/x/open@v1.0.0/index.ts';
 import SysTray, { Menu, MenuItem } from '../mod.ts';
 
-async function getIconUrl() {
+function getIconUrl() {
   const { os } = Deno.build;
-  const iconUrl =
-    'https://raw.githubusercontent.com/wobsoriano/deno-systray/master/example';
+  const iconUrl = `${Deno.cwd()}/example`;
 
-  let iconName;
+  let icon;
 
   switch (os) {
     case 'windows':
-      iconName = `${iconUrl}/icon.ico`;
+      icon = `${iconUrl}/icon.ico`.replaceAll('/', '\\');
       break;
     case 'darwin':
     case 'linux':
-      iconName = `${iconUrl}/icon.png`;
+      icon = `${iconUrl}/icon.png`;
       break;
     default:
       throw new Error(`Unsupported operating system: ${os}`);
   }
 
-  const icon = (await downloadAndCache(iconName)).path;
-
   return icon;
 }
 
-const icon = await getIconUrl();
+const icon = getIconUrl();
 
 interface MenuItemClickable extends MenuItem {
   click?: () => void;
@@ -93,7 +89,7 @@ const menu: CustomMenu = {
       tooltip: 'Go to repository',
       checked: false,
       click() {
-        open('https://github.com/wobsoriano/deno-systray');
+        open('https://github.com/joaogabrielti/deno-systray');
       },
     },
     {

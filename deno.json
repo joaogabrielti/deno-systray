@@ -1,18 +1,12 @@
 {
   "tasks": {
-    "example": "deno run --allow-run --allow-env --allow-read --allow-write --allow-net example/index.ts"
+    "example": "deno run --allow-read --allow-write --allow-run example/index.ts"
   },
   "lint": {
-    "files": {
-      "include": ["mod.ts", "deps.ts", "example/"]
-    }
+    "include": ["mod.ts", "deps.ts", "example/"]
   },
   "fmt": {
-    "files": {
-      "include": ["mod.ts", "deps.ts", "example/"]
-    },
-    "options": {
+      "include": ["mod.ts", "deps.ts", "example/"],
       "singleQuote": true
-    }
   }
 }

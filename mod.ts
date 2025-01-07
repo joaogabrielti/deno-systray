@@ -1,19 +1,6 @@
-import {
-  base64Encode,
-  configureCache,
-  debug,
-  downloadAndCache,
-  EventEmitter,
-  readLines,
-  withoutEnv,
-} from './deps.ts';
+import { encodeBase64, EventEmitter, TextLineStream } from './deps.ts';
 
-const version = Deno.env.get('TRAY_VERSION') ?? 'v0.2.0';
-const url = Deno.env.get('TRAY_URL') ??
-  `https://github.com/wobsoriano/systray-portable/releases/download/${version}`;
-
-const debugName = 'systray';
-const log = debug(debugName);
+const url = Deno.cwd().replaceAll('\\', '/');
 
 export interface MenuItem {
   title: string;
@@ -82,7 +69,13 @@ export type Action =
 
 export interface Conf {
   menu: Menu;
+  /**
+   * @deprecated
+   */
   debug?: boolean;
+  /**
+   * @deprecated
+   */
   directory?: string | undefined;
 }
 
@@ -103,7 +96,7 @@ function updateCheckedInLinux(item: MenuItem) {
 
 async function loadIcon(fileName: string) {
   const bytes = await Deno.readFile(fileName);
-  return base64Encode(bytes);
+  return encodeBase64(bytes);
 }
 
 async function resolveIcon(item: MenuItem | Menu) {
@@ -184,23 +177,23 @@ function actionTrimer(action: Action) {
   }
 }
 
-const getTrayPath = async () => {
-  let binName: string;
+const getTrayPath = () => {
+  let path: string;
   const { arch, os } = Deno.build;
 
   switch (os) {
     case 'windows':
-      binName = arch === 'x86_64'
-        ? `${url}/tray_windows_amd64.exe`
-        : `${url}/tray_windows_386.exe`;
+      path = arch === 'x86_64'
+        ? `${url.replaceAll('/', '\\')}\\tray_windows_amd64.exe`
+        : `${url.replaceAll('/', '\\')}\\tray_windows_386.exe`;
       break;
     case 'darwin':
-      binName = arch === 'x86_64'
+      path = arch === 'x86_64'
         ? `${url}/tray_darwin_amd64`
         : `${url}/tray_darwin_arm64`;
       break;
     case 'linux':
-      binName = arch === 'x86_64'
+      path = arch === 'x86_64'
         ? `${url}/tray_linux_amd64`
         : `${url}/tray_linux_arm64`;
       break;
@@ -208,14 +201,13 @@ const getTrayPath = async () => {
       throw new Error('Unsupported OS for tray application');
   }
 
-  const file = await downloadAndCache(binName);
-  return file.path;
+  return path;
 };
 
 type Events = {
   data: [string];
   error: [string];
-  exit: [Deno.ProcessStatus];
+  exit: [Deno.CommandStatus];
   click: [ClickEvent];
   ready: [];
 };
@@ -227,9 +219,10 @@ export default class SysTray extends EventEmitter<Events> {
     enabled: true,
   };
   protected _conf: Conf;
-  private _process: Deno.Process;
-  public get process(): Deno.Process {
-    return this._process;
+  private _command: Deno.Command;
+  private _systrayChildProcess: Deno.ChildProcess | null;
+  public get process(): Deno.Command {
+    return this._command;
   }
   protected _binPath: string;
   private _ready: Promise<void>;
@@ -237,44 +230,42 @@ export default class SysTray extends EventEmitter<Events> {
 
   constructor(conf: Conf) {
     super();
+
     this._conf = conf;
-    this._process = null!;
+    this._command = null!;
     this._binPath = null!;
-
-    if (this._conf.debug) {
-      withoutEnv(debugName);
-    }
-
-    if (this._conf.directory) {
-      configureCache({
-        directory: this._conf.directory,
-      });
-    }
+    this._systrayChildProcess = null;
 
     this._ready = this.init();
   }
 
-  private async run(...cmd: string[]) {
-    this._process = Deno.run({
-      cmd,
+  private async run(cmd: string, ...args: string[]) {
+    this._command = new Deno.Command(cmd, {
+      args,
       stdin: 'piped',
       stderr: 'piped',
       stdout: 'piped',
     });
-    for await (const line of readLines(this._process.stdout!)) {
-      if (line.trim()) this.emit('data', line);
-    }
-    for await (const line of readLines(this._process.stderr!)) {
+    this._systrayChildProcess = this._command.spawn();
+    const stdout = this._systrayChildProcess.stdout
+      .pipeThrough(new TextDecoderStream())
+      .pipeThrough(new TextLineStream());
+    const stderr = this._systrayChildProcess.stderr
+      .pipeThrough(new TextDecoderStream())
+      .pipeThrough(new TextLineStream());
+    for await (const line of stdout) {
       if (line.trim()) {
-        if (this._conf.debug) {
-          log('onError', line, 'binPath', this.binPath);
-        }
+        this.emit('data', line);
+      }
+    }
+    for await (const line of stderr) {
+      if (line.trim()) {
         this.emit('error', line);
       }
     }
-    const status = await this._process.status();
+    const status = await this._systrayChildProcess.status;
     this.emit('exit', status);
-    this._process.close();
+    await this._systrayChildProcess.stdin.close();
   }
 
   private async init() {
@@ -305,14 +296,8 @@ export default class SysTray extends EventEmitter<Events> {
         if (action.type === 'clicked') {
           const item = this.internalIdMap.get(action.__id)!;
           action.item = Object.assign(item, action.item);
-          if (this._conf.debug) {
-            log('%s, %o', 'onClick', action);
-          }
           this.emit('click', action);
         } else if (action.type === 'ready') {
-          if (this._conf.debug) {
-            log('%s %o', 'onReady', action);
-          }
           this.emit('ready');
         }
       });
@@ -325,13 +310,12 @@ export default class SysTray extends EventEmitter<Events> {
     return this._ready;
   }
 
-  private writeLine(line: string) {
+  private async writeLine(line: string) {
     if (line) {
-      if (this._conf.debug) {
-        log('%s %o', 'writeLine', line + '\n', '=====');
-      }
       const encoded = new TextEncoder().encode(`${line.trim()}\n`);
-      this._process.stdin!.write(encoded);
+      const writer = this._systrayChildProcess?.stdin.getWriter();
+      await writer?.write(encoded);
+      writer?.releaseLock();
     }
   }
 
@@ -355,9 +339,6 @@ export default class SysTray extends EventEmitter<Events> {
           action.seq_id = -1;
         }
         break;
-    }
-    if (this._conf.debug) {
-      log('%s %o', 'sendAction', action);
     }
     this.writeLine(JSON.stringify(actionTrimer(action)));
     return this;

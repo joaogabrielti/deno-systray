@@ -1,5 +1,10 @@
 {
   "deno.enable": true,
   "deno.lint": true,
-  "deno.unstable": true
+  "[typescript]": {
+    "editor.formatOnSave": true,
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2,
+    "editor.defaultFormatter": "denoland.vscode-deno"
+  }
 }
